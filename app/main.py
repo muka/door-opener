@@ -1,11 +1,11 @@
-
 from config import WIFI_SSID, WIFI_PASS, RELAY_PIN, DELAY
-import socket
-import network
-import time
-import esp
-from machine import Pin
 from time import sleep
+from machine import Pin
+import esp
+import time
+import network
+import socket
+import uasyncio as asyncio
 
 
 def connect_wifi():
@@ -102,70 +102,72 @@ def web_page():
     return html
 
 
-def http_server():
+def res_redirect(writer):
+    yield from writer.awrite("""HTTP/1.1 303 See Other
+Location: /
+Connection: close
+
+""")
+    yield from writer.aclose()
+
+
+def res_ok(writer):
+    yield from writer.awrite("""HTTP/1.1 200 OK
+Content-Type: text/html
+Connection: close
+
+""" + web_page())
+    yield from writer.aclose()
+
+
+def serve(reader, writer, pin):
+
+    request = str((yield from reader.read()))
+
+    if len(request) == 0:
+        return res_ok(writer)
+
+    lines = request.split("\\r\\n")
+    if len(lines) == 0:
+        return await res_ok(writer)
+    line0 = lines[0]
+    lines = None
+
+    parts = line0.split(" ")
+    if len(parts) < 3:
+        return await res_ok(writer)
+
+    method, path, _ = parts
+    print('%s %s' % (str(method), str(path)))
+
+    if path == "/open":
+        print("Open relay")
+        pin.on()
+        sleep(DELAY)
+        pin.off()
+        print("Closed relay")
+        return await res_redirect(writer)
+
+    if path == "/":
+        return await res_ok(writer)
+
+    await res_redirect(writer)
+
+
+def run():
+
+    ip = connect_wifi()
+    print('Starting service on http://%s' % ip)
 
     pin = Pin(RELAY_PIN, Pin.OUT)
     pin.off()
 
-    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    s.bind(('', 80))
-    s.listen(5)
-
-    lock = False
-
-    while True:
-
-        conn, addr = s.accept()
-
-        request = conn.recv(1024)
-        request = str(request)
-
-        if len(request) == 0:
-            continue
-
-        lines = request.split("\\r\\n")
-        if len(lines) == 0:
-            continue
-        line0 = lines[0]
-        lines = None
-
-        parts = line0.split(" ")
-        if len(parts) < 3:
-            continue
-
-        method, path, http_ver = parts
-        print('%s - %s %s' % (str(addr[0]), str(method), str(path)))
-
-        if path.find("open") > -1:
-            if not lock:
-                lock = True
-                print("Open relay")
-                pin.on()
-                sleep(DELAY)
-                pin.off()
-                print("Closed relay")
-                lock = False
-            else:
-                print("Locked..")
-
-            conn.send('HTTP/1.1 303 See Other\n')
-            conn.send('Location: /\n')
-            conn.send('Connection: close\n\n')
-
-            continue
-
-        conn.send('HTTP/1.1 200 OK\n')
-        conn.send('Content-Type: text/html\n')
-        conn.send('Connection: close\n\n')
-        response = web_page()
-        conn.sendall(response)
-        conn.close()
-
-
-def run():
-    ip = connect_wifi()
-    print('Starting service on http://%s' % ip)
-    http_server()
+    loop = asyncio.get_event_loop()
+    loop.call_soon(asyncio.start_server(
+        lambda r, w: serve(r, w, pin), "0.0.0.0", 80)
+    )
+    loop.run_forever()
+    loop.close()
 
 
 if __name__ == '__main__':
