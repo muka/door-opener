@@ -1,6 +1,6 @@
 from config import WIFI_SSID, WIFI_PASS, RELAY_PIN, DELAY
 from time import sleep
-from machine import Pin
+from machine import Pin, reset
 import esp
 import time
 import network
@@ -20,6 +20,7 @@ def connect_wifi():
     ip = ''
     if len(ifcfg) > 0:
         ip = ifcfg[0]
+
     print('wifi connected')
     return ip
 
@@ -156,6 +157,10 @@ def serve(reader, writer, pin):
 
 def run():
 
+    print('Disabling access point')
+    sta_if = network.WLAN(network.STA_IF)
+    sta_if.active(False)
+
     ip = connect_wifi()
     print('Starting service on http://%s' % ip)
 
@@ -163,11 +168,18 @@ def run():
     pin.off()
 
     loop = asyncio.get_event_loop()
-    loop.call_soon(asyncio.start_server(
-        lambda r, w: serve(r, w, pin), "0.0.0.0", 80)
-    )
-    loop.run_forever()
-    loop.close()
+    try:
+        loop.call_soon(
+            asyncio.start_server(
+                lambda r, w: serve(r, w, pin), "0.0.0.0", 80
+            )
+        )
+        loop.run_forever()
+    except Exception as err:
+        print(err)
+    finally:
+        loop.close()
+        reset()
 
 
 if __name__ == '__main__':
